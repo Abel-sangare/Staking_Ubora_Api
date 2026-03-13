@@ -1,0 +1,118 @@
+# Documentation du projet Staking Ubora API
+
+## Aperçu du projet
+
+Ce projet est une API pour une plateforme de staking. Elle permet aux utilisateurs de s'inscrire, de se connecter, de déposer des fonds, de souscrire à des plans de staking et de gérer leurs transactions.
+
+## Dépendances du projet
+
+### Dépendances de production
+
+- **axios**: Client HTTP basé sur les promesses pour le navigateur et node.js. Probablement utilisé pour faire des requêtes à d'autres services.
+- **bcrypt**: Une bibliothèque pour vous aider à hacher les mots de passe.
+- **dotenv**: Module sans dépendance qui charge les variables d'environnement d'un fichier `.env` dans `process.env`.
+- **ethers**: Une bibliothèque complète et compacte pour interagir avec la blockchain Ethereum et son écosystème.
+- **express**: Framework web rapide, non-opinionné et minimaliste pour Node.js. C'est le cœur de l'API.
+- **jsonwebtoken**: Une implémentation des JSON Web Tokens. Utilisé pour l'authentification.
+- **mysql2**: Client MySQL pour Node.js avec un focus sur les performances.
+- **swagger-jsdoc**: Génère la spécification Swagger/OpenAPI à partir des commentaires JSDoc.
+- **swagger-ui-express**: Sert l'interface utilisateur de Swagger pour les applications Express.
+- **uuid**: Pour la création d'UUID RFC4122.
+
+### Dépendances de développement
+
+- **nodemon**: Un outil qui aide à développer des applications basées sur node.js en redémarrant automatiquement l'application node lorsque des changements de fichiers dans le répertoire sont détectés.
+
+## Endpoints de l'API
+
+### Module: Auth
+
+- **POST /auth/register**: Enregistrer un nouvel utilisateur.
+    - **Request Body**: `email`, `phone`, `password`
+    - **Réponses**:
+        - `201`: Utilisateur créé
+        - `400`: Mauvaise requête
+- **POST /auth/login**: Connecter l'utilisateur.
+    - **Request Body**: `email`, `password`
+    - **Réponses**:
+        - `200`: Connexion réussie
+        - `400`: Identifiants invalides
+
+### Module: Payments
+
+- **POST /payments/intent**: Créer une intention de paiement.
+    - **Request Body**: `user_uuid`, `amount`, `currency`, `method` (enum: `stripe`, `paypal`, `card`)
+    - **Réponses**:
+        - `201`: Intention de paiement créée
+        - `400`: Mauvaise requête
+- **GET /payments/{uuid}/verify**: Vérifier le statut d'un paiement.
+    - **Path Parameter**: `uuid` (UUID du paiement)
+    - **Réponses**:
+        - `200`: Paiement vérifié
+        - `404`: Paiement non trouvé
+- **GET /payments/journal**: Obtenir le journal comptable des paiements.
+    - **Réponses**:
+        - `200`: Liste des paiements
+        - `400`: Mauvaise requête
+
+### Module: Staking
+
+- **POST /staking/plan**: Créer un plan de staking.
+    - **Request Body**: `name`, `duration_days`, `interest_rate`, `frequency` (enum: `daily`, `weekly`, `monthly`)
+    - **Réponses**:
+        - `201`: Plan créé
+        - `400`: Mauvaise requête
+- **GET /staking/plans**: Lister tous les plans de staking.
+    - **Réponses**:
+        - `200`: Liste des plans
+        - `400`: Mauvaise requête
+- **GET /staking/plan/{uuid}**: Obtenir un plan par UUID.
+    - **Path Parameter**: `uuid` (UUID du plan)
+    - **Réponses**:
+        - `200`: Plan trouvé
+        - `404`: Plan non trouvé
+- **PUT /staking/plan/{uuid}**: Mettre à jour un plan.
+    - **Path Parameter**: `uuid` (UUID du plan)
+    - **Request Body**: `name`, `duration_days`, `interest_rate`, `frequency` (enum: `daily`, `weekly`, `monthly`)
+    - **Réponses**:
+        - `200`: Plan mis à jour
+        - `400`: Erreur
+- **DELETE /staking/plan/{uuid}**: Supprimer un plan.
+    - **Path Parameter**: `uuid` (UUID du plan)
+    - **Réponses**:
+        - `200`: Plan supprimé
+        - `400`: Erreur
+- **POST /staking/subscribe**: Souscrire un utilisateur à un plan.
+    - **Request Body**: `user_uuid`, `plan_uuid`, `amount`
+    - **Réponses**:
+        - `201`: Souscription réussie
+        - `400`: Mauvaise requête
+
+### Module: Transactions
+
+- **POST /transactions/deposit**: Créer un dépôt pour un utilisateur.
+    - **Request Body**: `user_uuid`, `method` (enum: `binance`, `coinbase`, `metamask`, `trustwallet`, `fiat`), `amount`, `currency`
+    - **Réponses**:
+        - `201`: Dépôt créé avec succès
+        - `400`: Erreur de validation
+- **POST /transactions/withdrawal**: Créer une demande de retrait pour un utilisateur.
+    - **Request Body**: `user_uuid`, `method` (enum: `binance`, `coinbase`, `metamask`, `trustwallet`, `fiat`), `amount`, `currency`
+    - **Réponses**:
+        - `201`: Retrait créé avec succès
+        - `400`: Erreur
+- **PUT /transactions/{uuid}/status**: Mettre à jour le statut d'une transaction.
+    - **Path Parameter**: `uuid` (UUID de la transaction)
+    - **Request Body**: `status` (enum: `PENDING`, `APPROVED`, `SENT`, `CONFIRMED`, `FAILED`), `tx_hash`, `confirmations`
+    - **Réponses**:
+        - `200`: Transaction mise à jour
+        - `400`: Erreur
+- **GET /transactions**: Obtenir toutes les transactions ou filtrer par utilisateur.
+    - **Query Parameter**: `user_uuid` (optionnel)
+    - **Réponses**:
+        - `200`: Liste des transactions
+        - `400`: Mauvaise requête
+- **GET /transactions/{uuid}**: Obtenir une transaction par UUID.
+    - **Path Parameter**: `uuid` (UUID de la transaction)
+    - **Réponses**:
+        - `200`: Transaction trouvée
+        - `404`: Transaction non trouvée
