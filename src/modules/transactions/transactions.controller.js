@@ -6,12 +6,15 @@ import {
   createWithdrawal,
   updateTransactionStatus,
   getTransactions,
-  getTransactionById
+  getTransactionById,
+  adminApproveWithdrawal
 } from './transactions.service.js';
-import * as binanceService from '../../services/blockchain/binance.service.js'; // New import
+import * as binanceService from '../../services/blockchain/binance.service.js';
+import * as tronService from '../../services/blockchain/tron.service.js';
 import { createAuditLog } from '../../services/audit/audit.service.js';
-import { kycCheckMiddleware } from '../../middlewares/kyc.middleware.js'; // <-- Ajout de cette ligne
+import { kycCheckMiddleware } from '../../middlewares/kyc.middleware.js';
 import { getUserProfile } from '../users/users.service.js';
+import { db } from '../../config/database.js';
 
 const router = express.Router();
 
@@ -76,12 +79,54 @@ router.get(
         return res.status(404).json({ error: 'Utilisateur non trouvé.' });
       }
 
-      // Si un réseau spécifique est demandé (autre que BSC par défaut), on interroge Binance
-      if (network && network.toUpperCase() !== 'BSC') {
+      const net = network ? network.toUpperCase() : 'BSC';
+
+      // ─── GESTION TRON / TRC20 ──────────────────────────────────────────────
+      if (net === 'TRC20' || net === 'TRON' || net === 'TRX') {
+        // Si l'utilisateur a déjà une adresse TRON locale, on la renvoie
+        if (user.tron_wallet_address) {
+          return res.status(200).json({
+            address: user.tron_wallet_address,
+            coin: coin.toUpperCase(),
+            network: 'TRC20'
+          });
+        }
+
+        // Sinon, on tente d'en générer une localement
         try {
-          let binanceNetwork = network.toUpperCase();
-          // Mapping pour Binance : TRC20 et TRON sont identifiés par 'TRX'
-          if (binanceNetwork === 'TRC20' || binanceNetwork === 'TRON') binanceNetwork = 'TRX';
+          const newTronWallet = tronService.createTronWallet();
+          // On sauvegarde l'adresse TRON dans le profil utilisateur
+          await db.query(
+            'UPDATE users SET tron_wallet_address = ?, tron_encrypted_private_key = ? WHERE uuid = ?',
+            [newTronWallet.address, newTronWallet.privateKey, user.uuid]
+          );
+          
+          return res.status(200).json({
+            address: newTronWallet.address,
+            coin: coin.toUpperCase(),
+            network: 'TRC20'
+          });
+        } catch (tronErr) {
+          console.error('Erreur génération wallet TRON:', tronErr);
+          // Si la génération locale échoue et que Binance est configuré, on peut tenter Binance en dernier recours
+          if (process.env.BINANCE_API_KEY) {
+             const binanceAddress = await binanceService.getBinanceDepositAddress(coin.toUpperCase(), 'TRX');
+             return res.status(200).json({
+               address: binanceAddress.address,
+               tag: binanceAddress.tag,
+               coin: coin.toUpperCase(),
+               network: 'TRC20'
+             });
+          }
+          throw new Error('Impossible de générer une adresse TRON pour le moment.');
+        }
+      }
+
+      // ─── GESTION BSC / BEP20 (PAR DÉFAUT) ───────────────────────────────────
+      // Si un réseau spécifique autre que BSC/TRON est demandé, on tente Binance
+      if (network && !['BSC', 'BEP20', 'TRON', 'TRC20', 'TRX'].includes(net)) {
+        try {
+          let binanceNetwork = net;
           if (binanceNetwork === 'BEP20') binanceNetwork = 'BSC';
 
           const binanceAddress = await binanceService.getBinanceDepositAddress(coin.toUpperCase(), binanceNetwork);
@@ -89,15 +134,15 @@ router.get(
             address: binanceAddress.address,
             tag: binanceAddress.tag,
             coin: coin.toUpperCase(),
-            network: network.toUpperCase()
+            network: net
           });
         } catch (binanceErr) {
           console.error(`Erreur Binance pour l'adresse ${coin}/${network}:`, binanceErr.message);
-          return res.status(400).json({ error: `Impossible de récupérer une adresse de dépôt pour le réseau ${network}. ${binanceErr.message}` });
+          return res.status(400).json({ error: `Réseau ${network} non supporté ou erreur API Binance.` });
         }
       }
 
-      // Par défaut, ou si BSC est demandé, on peut retourner l'adresse locale du portefeuille (EVM)
+      // Par défaut (BSC), on retourne l'adresse locale EVM
       if (!user.wallet_address) {
         return res.status(404).json({ error: 'Adresse de portefeuille locale non trouvée.' });
       }
@@ -105,7 +150,7 @@ router.get(
       res.status(200).json({
         address: user.wallet_address,
         coin: coin.toUpperCase(),
-        network: network ? network.toUpperCase() : 'BSC'
+        network: 'BSC'
       });
 
     } catch (err) {

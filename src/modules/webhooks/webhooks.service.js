@@ -60,7 +60,12 @@ export async function processAlchemyWebhookEvent(payload) {
 
       console.log(`[Alchemy] Dépôt: ${amount} ${currency} sur ${network} → ${toAddress}`);
 
-      const [users] = await db.query('SELECT uuid FROM users WHERE wallet_address = ?', [toAddress]);
+      // Recherche de l'utilisateur sur wallet_address (EVM) OU tron_wallet_address (TRON)
+      const [users] = await db.query(
+        'SELECT uuid FROM users WHERE wallet_address = ? OR tron_wallet_address = ?',
+        [toAddress, toAddress]
+      );
+
       if (users.length === 0) {
         console.warn(`[Alchemy] Aucun utilisateur pour ${toAddress}`);
         continue;
