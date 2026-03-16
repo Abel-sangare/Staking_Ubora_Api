@@ -1,5 +1,6 @@
 import { ethers } from 'ethers';
 import dotenv from 'dotenv';
+import * as tronService from './tron.service.js';
 
 dotenv.config();
 
@@ -24,9 +25,12 @@ if (process.env.PLATFORM_HOT_WALLET_PRIVATE_KEY && providers.bsc) {
 export { platformHotWallet };
 
 /**
- * Vérifier une adresse Ethereum/BSC
+ * Vérifier une adresse (Ethereum/BSC ou TRON)
  */
-export function isValidAddress(address) {
+export function isValidAddress(address, network = 'bsc') {
+  if (network.toLowerCase() === 'tron' || network.toLowerCase() === 'trc20') {
+    return tronService.isValidTronAddress(address);
+  }
   return ethers.isAddress(address);
 }
 
@@ -34,6 +38,9 @@ export function isValidAddress(address) {
  * Lire le solde d'une adresse
  */
 export async function getBalance(chain, address) {
+  if (chain.toLowerCase() === 'tron' || chain.toLowerCase() === 'trc20') {
+    return await tronService.getTrxBalance(address);
+  }
   if (!isValidAddress(address)) throw new Error('Adresse invalide');
   return await providers[chain].getBalance(address);
 }
@@ -42,7 +49,7 @@ export async function getBalance(chain, address) {
  * Envoyer une transaction (HOT WALLET)
  */
 export async function sendTransaction(chain, fromWallet, toAddress, amount) {
-  if (!isValidAddress(toAddress)) throw new Error('Adresse destinataire invalide');
+  if (!isValidAddress(toAddress, chain)) throw new Error('Adresse destinataire invalide');
 
   // Calcul gas fees
   const gasPrice = await providers[chain].getFeeData();
@@ -60,50 +67,71 @@ export async function sendTransaction(chain, fromWallet, toAddress, amount) {
  * @param {string} toAddress - Adresse de destination.
  * @param {number} amount - Montant à envoyer (en ether/BNB pour BNB natif, ou en unité du token pour ERC-20/BEP-20).
  * @param {string} currency - Devise (ex: 'BNB', 'USDT').
- * @param {string} network - Réseau (ex: 'bsc').
+ * @param {string} network - Réseau (ex: 'bsc', 'tron', 'trc20').
  * @returns {Promise<string>} Le hash de la transaction.
  */
 export async function sendPlatformWithdrawal(toAddress, amount, currency, network) {
-  if (!platformHotWallet) {
-    throw new Error('Le portefeuille chaud de la plateforme n\'est pas configuré ou est invalide.');
-  }
-  if (!isValidAddress(toAddress)) {
-    throw new Error('Adresse de destination invalide pour le retrait.');
-  }
-  if (network.toLowerCase() !== 'bsc') { // Pour l'instant, ne supporte que BSC, rendu insensible à la casse
-    throw new Error('Seul le réseau BSC est supporté pour les retraits directs de la plateforme.');
-  }
+  const net = network.toLowerCase();
 
-  try {
-    const provider = providers.bsc;
-    const gasPrice = await provider.getFeeData();
-
-    let tx;
-    if (currency.toUpperCase() === 'BNB') {
-      // Retrait de BNB natif
-      tx = await platformHotWallet.sendTransaction({
-        to: toAddress,
-        value: ethers.parseEther(amount.toString()),
-        gasPrice: gasPrice.maxFeePerGas,
-      });
-    } else if (currency.toUpperCase() === 'USDT') {
-      // Retrait de USDT (BEP-20)
-      // TODO: Charger l'ABI du contrat USDT et l'adresse du contrat dynamiquement si nécessaire
-      const USDT_CONTRACT_ADDRESS = '0x55d398326f99059ff775485246999027b3197955'; // Adresse USDT BEP-20
-      const USDT_ABI = ["function transfer(address to, uint256 amount) returns (bool)"];
-      const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, USDT_ABI, platformHotWallet);
-      
-      const amountInUnits = ethers.parseUnits(amount.toString(), 18); // USDT sur BSC (BEP-20) a 18 décimales
-      tx = await usdtContract.transfer(toAddress, amountInUnits);
-    } else {
-      throw new Error(`La devise ${currency} n'est pas supportée pour les retraits directs de la plateforme.`);
+  // ─── GESTION TRON (TRC20) ───────────────────────────────────────────────────
+  if (net === 'tron' || net === 'trc20') {
+    if (!tronService.platformTronHotWalletKey) {
+      throw new Error('Le portefeuille chaud TRON de la plateforme n\'est pas configuré.');
+    }
+    if (!tronService.isValidTronAddress(toAddress)) {
+      throw new Error('Adresse TRON invalide pour le retrait.');
     }
 
-    return tx.hash;
-  } catch (error) {
-    console.error('Erreur lors de l\'envoi du retrait depuis le portefeuille de la plateforme:', error);
-    throw new Error(`Échec de l'envoi du retrait depuis la plateforme: ${error.message}`);
+    if (currency.toUpperCase() === 'TRX') {
+      return await tronService.sendTrx(tronService.platformTronHotWalletKey, toAddress, amount);
+    } else if (currency.toUpperCase() === 'USDT') {
+      return await tronService.sendUsdtTrc20(tronService.platformTronHotWalletKey, toAddress, amount);
+    } else {
+      throw new Error(`La devise ${currency} n'est pas supportée sur TRON via la plateforme.`);
+    }
   }
+
+  // ─── GESTION BSC (BEP20) ────────────────────────────────────────────────────
+  if (net === 'bsc' || net === 'bep20') {
+    if (!platformHotWallet) {
+      throw new Error('Le portefeuille chaud BSC de la plateforme n\'est pas configuré.');
+    }
+    if (!ethers.isAddress(toAddress)) {
+      throw new Error('Adresse BSC/EVM invalide pour le retrait.');
+    }
+
+    try {
+      const provider = providers.bsc;
+      const gasPrice = await provider.getFeeData();
+
+      let tx;
+      if (currency.toUpperCase() === 'BNB') {
+        // Retrait de BNB natif
+        tx = await platformHotWallet.sendTransaction({
+          to: toAddress,
+          value: ethers.parseEther(amount.toString()),
+          gasPrice: gasPrice.maxFeePerGas,
+        });
+      } else if (currency.toUpperCase() === 'USDT') {
+        // Retrait de USDT (BEP-20)
+        const USDT_CONTRACT_ADDRESS = '0x55d398326f99059ff775485246999027b3197955';
+        const USDT_ABI = ["function transfer(address to, uint256 amount) returns (bool)"];
+        const usdtContract = new ethers.Contract(USDT_CONTRACT_ADDRESS, USDT_ABI, platformHotWallet);
+        
+        const amountInUnits = ethers.parseUnits(amount.toString(), 18);
+        tx = await usdtContract.transfer(toAddress, amountInUnits);
+      } else {
+        throw new Error(`La devise ${currency} n'est pas supportée sur BSC via la plateforme.`);
+      }
+
+      return tx.hash;
+    } catch (error) {
+      console.error('Erreur lors de l\'envoi du retrait BSC:', error);
+      throw new Error(`Échec de l'envoi du retrait BSC: ${error.message}`);
+    }
+  }
+
+  throw new Error(`Le réseau ${network} n'est pas supporté pour les retraits directs.`);
 }
 
 /**
