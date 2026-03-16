@@ -79,10 +79,15 @@ router.get(
       // Si un réseau spécifique est demandé (autre que BSC par défaut), on interroge Binance
       if (network && network.toUpperCase() !== 'BSC') {
         try {
-          const binanceAddress = await binanceService.getBinanceDepositAddress(coin.toUpperCase(), network.toUpperCase());
+          let binanceNetwork = network.toUpperCase();
+          // Mapping pour Binance : TRC20 est souvent identifié par 'TRX'
+          if (binanceNetwork === 'TRC20') binanceNetwork = 'TRX';
+          if (binanceNetwork === 'BEP20') binanceNetwork = 'BSC';
+
+          const binanceAddress = await binanceService.getBinanceDepositAddress(coin.toUpperCase(), binanceNetwork);
           return res.status(200).json({
             address: binanceAddress.address,
-            tag: binanceAddress.tag, // Certains réseaux comme BNB (BEP2) nécessitent un Memo/Tag
+            tag: binanceAddress.tag,
             coin: coin.toUpperCase(),
             network: network.toUpperCase()
           });
