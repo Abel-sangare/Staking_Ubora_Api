@@ -80,8 +80,8 @@ router.get(
       if (network && network.toUpperCase() !== 'BSC') {
         try {
           let binanceNetwork = network.toUpperCase();
-          // Mapping pour Binance : TRC20 est souvent identifié par 'TRX'
-          if (binanceNetwork === 'TRC20') binanceNetwork = 'TRX';
+          // Mapping pour Binance : TRC20 et TRON sont identifiés par 'TRX'
+          if (binanceNetwork === 'TRC20' || binanceNetwork === 'TRON') binanceNetwork = 'TRX';
           if (binanceNetwork === 'BEP20') binanceNetwork = 'BSC';
 
           const binanceAddress = await binanceService.getBinanceDepositAddress(coin.toUpperCase(), binanceNetwork);
