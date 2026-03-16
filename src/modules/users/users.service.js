@@ -104,7 +104,7 @@ export async function getUserWalletBalance(user_uuid) {
   // Récupérer tous les dépôts confirmés
   const [deposits] = await db.query(
     `SELECT SUM(amount) as total FROM transactions 
-     WHERE user_uuid = ? AND type = "deposit" AND status = "CONFIRMED"`,
+     WHERE user_uuid = ? AND type = "deposit" AND method != "staking_reward" AND status = "CONFIRMED"`,
     [user_uuid]
   );
   
