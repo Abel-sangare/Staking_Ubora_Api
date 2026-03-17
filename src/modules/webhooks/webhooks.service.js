@@ -1,26 +1,37 @@
-// src/modules/webhooks/webhooks.service.js
-import { db } from '../../config/database.js';
-import { updateTransactionStatus } from '../transactions/transactions.service.js';
-import { createAuditLog } from '../../services/audit/audit.service.js';
-import { confirmPaymentFromWebhook } from '../payments/payments.service.js';
+import { processIncomingDeposit } from '../transactions/deposit.service.js';
+import crypto from 'crypto';
+
+/**
+ * Vérifie la signature HMAC des webhooks Alchemy pour empêcher les attaques.
+ * @param {string} rawBody - Le corps brut de la requête (nécessaire pour HMAC)
+ * @param {string} signature - La signature passée dans le header x-alchemy-signature
+ */
+export function verifyAlchemySignature(rawBody, signature) {
+  const token = process.env.ALCHEMY_AUTH_TOKEN;
+  if (!token) {
+    console.warn('[Webhook] ALCHEMY_AUTH_TOKEN manquant. Sécurité désactivée !');
+    return true; // Mode développement (à changer en production)
+  }
+  const hmac = crypto.createHmac('sha256', token);
+  hmac.update(rawBody);
+  const digest = hmac.digest('hex');
+  return digest === signature;
+}
 
 // ── Alchemy ───────────────────────────────────────────────────────────────────
 
 export async function processAlchemyWebhookEvent(payload) {
   try {
-    const activities =
-      payload?.event?.activity ||
-      payload?.activity ||
-      [];
+    const activities = payload?.event?.activity || payload?.activity || [];
 
     if (!Array.isArray(activities) || activities.length === 0) {
-      console.warn('[Webhook Alchemy] Aucun activity trouvé dans le payload.');
       return;
     }
 
     for (const activity of activities) {
       let toAddress, amount, currency, tx_hash, network;
 
+      // Détection du type d'événement Alchemy (Address Activity)
       if (activity.assetChanges && activity.assetChanges.length > 0) {
         const receiveChange = activity.assetChanges.find(c => c.type === 'receive' && c.to);
         if (receiveChange) {
@@ -30,66 +41,39 @@ export async function processAlchemyWebhookEvent(payload) {
           tx_hash   = activity.hash;
           network   = activity.network || activity.chain;
         }
-      } else if (
-        activity.toAddress &&
-        (activity.category === 'token' || activity.category === 'external') &&
-        activity.value > 0
-      ) {
+      } else if (activity.toAddress && activity.value > 0) {
         toAddress = activity.toAddress;
         amount    = activity.value;
         currency  = activity.asset;
         tx_hash   = activity.hash;
         network   = activity.network || activity.chain;
-      } else {
-        continue;
       }
 
+      if (!toAddress || !amount || isNaN(amount) || !tx_hash) continue;
+
+      // Normalisation des réseaux
       if (network) {
         network = network.toUpperCase();
         if (network === 'BSC')  network = 'BEP20';
         if (network === 'TRON') network = 'TRC20';
       }
+
+      // Normalisation des monnaies
       if (currency) {
         currency = currency.toUpperCase();
         if (currency === 'BNB' && network !== 'BEP20') network = 'BNB';
         if (currency === 'TRX' && network !== 'TRC20') network = 'TRX';
-        if (currency === 'USDT' && !network)           network = 'BEP20';
       }
 
-      if (!toAddress || !amount || isNaN(amount) || !tx_hash || !network) continue;
-
-      console.log(`[Alchemy] Dépôt: ${amount} ${currency} sur ${network} → ${toAddress}`);
-
-      // Recherche de l'utilisateur sur wallet_address (EVM) OU tron_wallet_address (TRON)
-      const [users] = await db.query(
-        'SELECT uuid FROM users WHERE wallet_address = ? OR tron_wallet_address = ?',
-        [toAddress, toAddress]
-      );
-
-      if (users.length === 0) {
-        console.warn(`[Alchemy] Aucun utilisateur pour ${toAddress}`);
-        continue;
-      }
-      const user_uuid = users[0].uuid;
-
-      const [existing] = await db.query('SELECT * FROM transactions WHERE tx_hash = ?', [tx_hash]);
-      if (existing.length === 0) {
-        await db.query(
-          `INSERT INTO transactions
-           (uuid, user_uuid, type, method, amount, currency, status, tx_hash, network, created_at, updated_at)
-           VALUES (UUID(), ?, 'deposit', 'alchemy', ?, ?, 'CONFIRMED', ?, ?, NOW(), NOW())`,
-          [user_uuid, amount, currency, tx_hash, network]
-        );
-        await createAuditLog({
-          event_type: 'DEPOSIT_WEBHOOK_RECEIVED',
-          actor_uuid: user_uuid, actor_role: 'system',
-          entity_type: 'TRANSACTION', entity_uuid: tx_hash,
-          metadata: { amount, currency, network, tx_hash }
-        });
-        console.log(`[Alchemy] Transaction CONFIRMED créée sur ${network}.`);
-      } else {
-        console.log('[Alchemy] Transaction déjà existante.');
-      }
+      // Appeler le service centralisé pour le crédit
+      await processIncomingDeposit({
+        toAddress,
+        amount,
+        currency,
+        network,
+        tx_hash,
+        method: 'alchemy_webhook'
+      });
     }
   } catch (error) {
     console.error('[Alchemy] Erreur traitement webhook:', error);
